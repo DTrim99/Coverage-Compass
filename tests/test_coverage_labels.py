@@ -159,7 +159,9 @@ class TestCoverageLabels:
         assert labels == {"You": COVERAGE_GAP, "Spouse": COVERAGE_GAP}
 
     def test_medicaid(self):
-        labels, _ = labels_for(single(40, state="CA"), fraction=0.95, medicaid=[6439.11])
+        labels, _ = labels_for(
+            single(40, state="CA"), fraction=0.95, medicaid=[6439.11]
+        )
         assert labels == {"You": COVERAGE_MEDICAID}
 
     def test_medicare(self):
@@ -186,7 +188,9 @@ class TestCoverageLabels:
 
     def test_eligible_without_credit_is_not_full_price(self):
         """Inside the PTC income range, a $0 credit never reads as full price."""
-        labels, _ = labels_for(couple(state="CA"), fraction=1.46, ptc_eligible=[True, True])
+        labels, _ = labels_for(
+            couple(state="CA"), fraction=1.46, ptc_eligible=[True, True]
+        )
         assert labels == {
             "You": COVERAGE_MARKETPLACE_NO_CREDIT,
             "Spouse": COVERAGE_MARKETPLACE_NO_CREDIT,
