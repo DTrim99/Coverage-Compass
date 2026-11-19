@@ -5,12 +5,21 @@ import HouseholdWizard from '@/components/HouseholdWizard';
 import ChangeWizard from '@/components/ChangeWizard';
 import ResultsView from '@/components/ResultsView';
 import { Household, LifeEventType, SimulationResult, LIFE_EVENTS } from '@/types';
+import * as gtag from '@/lib/gtag';
 
 interface SavedScenario {
   id: string;
   event: LifeEventType;
   params: Record<string, unknown>;
   result: SimulationResult;
+}
+
+function appPath(path: string): string {
+  return `${process.env.NEXT_PUBLIC_BASE_PATH || ''}${path}`;
+}
+
+function appUrl(path: string): string {
+  return new URL(appPath(path), window.location.origin).toString();
 }
 
 function newScenarioId(): string {
@@ -73,7 +82,7 @@ export default function Home() {
   // so the subsequent /api/simulate call on Apply doesn't pay a cold start.
   const warmBackend = useCallback(async (h: Household) => {
     try {
-      await fetch('/api/baseline', {
+      await fetch(appPath('/api/baseline'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ household: h }),
@@ -92,7 +101,7 @@ export default function Home() {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/simulate', {
+      const response = await fetch(appPath('/api/simulate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -111,16 +120,22 @@ export default function Home() {
       if (reqId !== requestSeq.current) return; // stale response; a newer action superseded it
       if (data.error) throw new Error(data.error);
       if (!data.before || !data.after) throw new Error('Invalid response from simulation');
+      const netBefore = data.acaPremiums?.before?.silverNet ?? 0;
+      const netAfter = data.acaPremiums?.after?.silverNet ?? 0;
+      gtag.trackSimulationComplete(event, (netAfter - netBefore) / 12);
       const id = newScenarioId();
       setScenarios((prev) => [...prev, { id, event, params, result: data }]);
       setCurrentScenarioId(id);
       const encoded = encodeScenario(h, event, params);
-      const url = `${window.location.origin}?s=${encoded}`;
+      const path = `?s=${encoded}`;
+      const url = appUrl(path);
       setShareUrl(url);
-      window.history.replaceState({}, '', `?s=${encoded}`);
+      window.history.replaceState({}, '', appPath(path));
     } catch (err) {
       if (reqId !== requestSeq.current) return;
-      setError(err instanceof Error ? err.message : 'Something went wrong');
+      const msg = err instanceof Error ? err.message : 'Something went wrong';
+      gtag.trackSimulationError(event, msg);
+      setError(msg);
     } finally {
       if (reqId === requestSeq.current) {
         setIsLoading(false);
@@ -136,8 +151,9 @@ export default function Home() {
     setEventParams(s.params);
     setError(null);
     const encoded = encodeScenario(h, s.event, s.params);
-    setShareUrl(`${window.location.origin}?s=${encoded}`);
-    window.history.replaceState({}, '', `?s=${encoded}`);
+    const path = `?s=${encoded}`;
+    setShareUrl(appUrl(path));
+    window.history.replaceState({}, '', appPath(path));
   }, []);
 
   const removeScenario = useCallback((id: string) => {
@@ -168,19 +184,20 @@ export default function Home() {
     setScenarios([]);
     setCurrentScenarioId(null);
     setError(null);
-    // Warm the Modal container in the background so the Apply spinner is
-    // shorter (avoids paying a cold start on the /api/simulate call).
+    gtag.trackWizardComplete(h.state, h.filingStatus);
     warmBackend(h);
   };
 
   const handleRun = () => {
     if (household && selectedEvent) {
+      gtag.trackSimulationRun(selectedEvent, household.state);
       runSimulation(household, selectedEvent, eventParams);
     }
   };
 
   const handleShare = async () => {
     if (!shareUrl) return;
+    gtag.trackShareClick();
     try { await navigator.clipboard.writeText(shareUrl); } catch {
       const input = document.createElement('input');
       input.value = shareUrl;
@@ -194,6 +211,7 @@ export default function Home() {
   };
 
   const handleTryAnother = () => {
+    gtag.trackTryAnother();
     // Keep household + scenario history. Clear the active event/result so
     // the user can model a new what-if.
     requestSeq.current++;
@@ -207,6 +225,7 @@ export default function Home() {
   };
 
   const handleReset = () => {
+    gtag.trackReset();
     requestSeq.current++;
     setIsLoading(false);
     setHousehold(null);
@@ -592,7 +611,14 @@ function describeScenarioChanges(
       return out;
     }
     case 'ending_pregnancy':
-      out.push({ label: 'Pregnancy', text: 'ending' });
+      out.push({
+        label: 'Pregnancy',
+        text: 'ending',
+      });
+      out.push({
+        label: 'New babies',
+        text: `${(params.newbornCount as number | undefined) ?? 0} added`,
+      });
       return out;
     default:
       return out;
