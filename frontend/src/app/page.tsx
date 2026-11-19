@@ -652,18 +652,28 @@ function getHeroHeadline(eventType: LifeEventType, result: SimulationResult): st
   const afterByLabel = new Map(afterPeople.map((p) => [p.label, p.coverage]));
   const allLabels = Array.from(new Set([...beforeByLabel.keys(), ...afterByLabel.keys()]));
 
+  // "Medicare + Medicaid" counts toward both programs, so a 65+ person
+  // who gains Medicaid still shows up as a Medicaid transition.
+  const hasMedicaid = (c: string | null | undefined) =>
+    c === 'Medicaid' || c === 'Medicare + Medicaid';
+  const hasMedicare = (c: string | null | undefined) =>
+    c === 'Medicare' || c === 'Medicare + Medicaid';
   const gainedMedicaid = allLabels.filter(
-    (l) => beforeByLabel.get(l) !== 'Medicaid' && afterByLabel.get(l) === 'Medicaid',
+    (l) => !hasMedicaid(beforeByLabel.get(l)) && hasMedicaid(afterByLabel.get(l)),
   );
   const lostMedicaid = allLabels.filter(
-    (l) => beforeByLabel.get(l) === 'Medicaid' && afterByLabel.get(l) !== 'Medicaid',
+    (l) => hasMedicaid(beforeByLabel.get(l)) && !hasMedicaid(afterByLabel.get(l)),
   );
   const isMarketplace = (c: string | null | undefined) => !!c && c.startsWith('Marketplace');
   const anyMarketplaceBefore = beforePeople.some((p) => isMarketplace(p.coverage));
   const anyMarketplaceAfter = afterPeople.some((p) => isMarketplace(p.coverage));
   const gainedMedicare = allLabels.filter(
-    (l) => beforeByLabel.get(l) !== 'Medicare' && afterByLabel.get(l) === 'Medicare',
+    (l) => !hasMedicare(beforeByLabel.get(l)) && hasMedicare(afterByLabel.get(l)),
   );
+  // Who ends up in the coverage gap (below the tax credit's income floor,
+  // no Medicaid) or above the tax credit's income limit after the event.
+  const inGapAfter = allLabels.filter((l) => afterByLabel.get(l) === 'Coverage gap');
+  const fullPriceAfter = afterPeople.some((p) => p.coverage === 'Marketplace (full price)');
 
   // Metric-level transitions.
   const metrics = result.before.metrics ?? [];
@@ -689,12 +699,26 @@ function getHeroHeadline(eventType: LifeEventType, result: SimulationResult): st
     return `${subject} qualifies ${describeWho(gainedMedicaid)} for Medicaid.`;
   }
   if (lostMedicaid.length > 0) {
+    const intoGap = lostMedicaid.filter((l) => inGapAfter.includes(l));
+    if (intoGap.length === lostMedicaid.length) {
+      return `${subject} moves ${describeWho(lostMedicaid)} out of Medicaid and into the coverage gap.`;
+    }
     return `${subject} moves ${describeWho(lostMedicaid)} out of Medicaid.`;
   }
   if (gainedMedicare.length > 0) {
     return `${subject} moves ${describeWho(gainedMedicare)} onto Medicare.`;
   }
-  if (lostPTC) return `${subject} ends your ACA tax credit — you'd pay full price.`;
+  if (lostPTC) {
+    // Say "full price" only when the backend found income above the tax
+    // credit's limit; other ways of losing the credit get their own copy.
+    if (fullPriceAfter) {
+      return `${subject} puts your household above the ACA tax credit's income limit — you'd pay full price.`;
+    }
+    if (inGapAfter.length > 0) {
+      return `${subject} puts ${describeWho(inGapAfter)} in the coverage gap — below the ACA tax credit's income minimum and not eligible for Medicaid.`;
+    }
+    return `${subject} reduces your ACA tax credit to $0.`;
+  }
   if (gainedPTC) return `${subject} qualifies you for an ACA tax credit.`;
   const headBefore = beforeByLabel.get('You') ?? null;
   const headAfter = afterByLabel.get('You') ?? null;
