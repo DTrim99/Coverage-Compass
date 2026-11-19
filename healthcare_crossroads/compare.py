@@ -9,6 +9,11 @@ from typing import Any
 
 from policyengine_us import Simulation
 
+from .events.base import LifeEvent
+from .events.divorce import Divorce
+from .events.marriage import Marriage
+from .household import Household, Person
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,11 +23,6 @@ class SimulationComputeError(RuntimeError):
     The message is safe to show to end users; the underlying exception is
     logged server-side only.
     """
-
-from .events.base import LifeEvent
-from .events.divorce import Divorce
-from .events.marriage import Marriage
-from .household import Household, Person
 
 
 # Healthcare-only variable list. The app surfaces healthcare coverage and
