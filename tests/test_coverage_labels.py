@@ -11,7 +11,10 @@ from types import SimpleNamespace
 import pytest
 
 from healthcare_crossroads import Household, Person
-from healthcare_crossroads.api import create_household_from_request
+from healthcare_crossroads.api import (
+    create_event_from_request,
+    create_household_from_request,
+)
 from healthcare_crossroads.compare import (
     COVERAGE_CHIP,
     COVERAGE_ESI,
@@ -28,6 +31,7 @@ from healthcare_crossroads.compare import (
     HealthcareCoverage,
     PersonHealthcare,
     classify_ptc_income,
+    compare,
     ptc_income_range,
     run_baseline,
 )
@@ -301,3 +305,49 @@ class TestCoverageLabelsWithPolicyEngine:
         baseline = run_baseline(create_household_from_request(request_data))
         labels = {p.label: p.coverage_type for p in baseline.healthcare.people}
         assert labels == expected
+
+
+class TestCaliforniaCoupleRegression:
+    """Married couple, both 40, San Francisco (94110), no employer coverage.
+
+    At $31,000 (146% of the prior-year FPL) they are above Medi-Cal's adult
+    limit and inside the premium tax credit's range, but below the joint
+    filing threshold. policyengine-us before 2.42.2 zeroed the credit for
+    households that weren't otherwise filers, so the tool showed $0 and
+    "No coverage". The tool now marks the tax unit as filing a return, as
+    claiming the credit requires (26 CFR 1.6011-8(a)).
+    """
+
+    @staticmethod
+    def household(income: float):
+        return create_household_from_request(
+            _request(
+                state="CA",
+                zipCode="94110",
+                filingStatus="married_jointly",
+                income=income,
+                age=40,
+                spouseAge=40,
+            )
+        )
+
+    def test_couple_at_31k_gets_tax_credit(self):
+        baseline = run_baseline(self.household(31_000))
+        # Benchmark of about $17,441 less a required contribution of about
+        # $1,222 (3.94% of $31,000) under the pinned policyengine-us.
+        assert baseline.results["premium_tax_credit"] > 10_000
+        assert baseline.results["medicaid"] == 0
+        labels = {p.label: p.coverage_type for p in baseline.healthcare.people}
+        assert labels == {"You": COVERAGE_MARKETPLACE, "Spouse": COVERAGE_MARKETPLACE}
+
+    def test_income_drop_to_31k_keeps_tax_credit(self):
+        household = self.household(36_000)
+        event = create_event_from_request(
+            "changing_income", {"newIncome": 31_000}, household
+        )
+        result = compare(household, event)
+        ptc = result.changes["premium_tax_credit"]
+        assert ptc.before > 0
+        assert ptc.after > ptc.before  # lower income, larger credit
+        after = {p.label: p.coverage_type for p in result.healthcare_after.people}
+        assert after == {"You": COVERAGE_MARKETPLACE, "Spouse": COVERAGE_MARKETPLACE}
